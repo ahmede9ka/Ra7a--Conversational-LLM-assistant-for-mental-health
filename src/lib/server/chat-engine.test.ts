@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runChatTurn, type ChatProvider, type ChatStore } from "@/lib/server/chat-engine";
 import type { Database } from "@/lib/supabase/database.types";
 import type { ChatRequest } from "@/lib/chat/validation";
+import { ProviderError } from "@/lib/llm/types";
 
 type Message = Database["public"]["Tables"]["messages"]["Row"];
 const userId = "00000000-0000-0000-0000-000000000101";
@@ -99,6 +100,15 @@ describe("runChatTurn", () => {
     expect(store.messages).toHaveLength(2);
     expect(store.messages.some((message) => message.role === "assistant")).toBe(false);
     expect(store.releases).toBe(1);
+  });
+
+  it("reports a selected provider configuration problem without switching providers", async () => {
+    provider.mockRejectedValue(new ProviderError("Missing key", "configuration"));
+    const result = await runChatTurn(input, userId, store, provider);
+    expect(result.status).toBe(503);
+    expect(result.body.error).toContain("selected reply provider is not configured");
+    expect(store.messages.some((message) => message.role === "assistant")).toBe(false);
+    expect(provider).toHaveBeenCalledTimes(1);
   });
 
   it("returns a recoverable error if the model reply cannot be persisted", async () => {

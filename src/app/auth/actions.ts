@@ -81,11 +81,31 @@ export async function updateDisplayNameAction(formData: FormData) {
     const supabase = await createSupabaseServerClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) redirect("/login");
-    const { error } = await supabase.from("profiles").update({ display_name: displayName || null }).eq("id", user.id);
-    if (error) redirect("/settings?error=save");
+    const { error: metadataError } = await supabase.auth.updateUser({ data: { display_name: displayName || null } });
+    if (metadataError) redirect("/settings?error=save");
+    // Keep the profile row in sync when available. Auth metadata remains the durable source,
+    // so an absent or not-yet-migrated profile row cannot make the save appear successful but disappear.
+    await supabase.from("profiles").update({ display_name: displayName || null }).eq("id", user.id);
   } catch (error) {
     if (error && typeof error === "object" && "digest" in error) throw error;
     redirect("/settings?error=save");
   }
   redirect("/settings?saved=1");
+}
+
+export async function updateProviderPreferenceAction(formData: FormData) {
+  if (!getSupabasePublicEnv()) redirect("/login");
+  const provider = getField(formData, "provider");
+  if (provider !== "ollama" && provider !== "openrouter") redirect("/settings?error=provider");
+  try {
+    const supabase = await createSupabaseServerClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) redirect("/login");
+    const { error } = await supabase.auth.updateUser({ data: { raha_provider_preference: provider } });
+    if (error) redirect("/settings?error=provider");
+  } catch (error) {
+    if (error && typeof error === "object" && "digest" in error) throw error;
+    redirect("/settings?error=provider");
+  }
+  redirect("/settings?saved=provider");
 }

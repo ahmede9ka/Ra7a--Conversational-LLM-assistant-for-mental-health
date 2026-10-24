@@ -25,7 +25,7 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
       {state.message && <p className="auth-message" role="status">{state.message}</p>}
       <SubmitButton label={isSignUp ? "Create account" : "Sign in"} />
       <p className="auth-switch">{isSignUp ? "Already have an account?" : "New to Raha?"} <Link href={isSignUp ? "/login" : "/signup"}>{isSignUp ? "Sign in" : "Create an account"}</Link></p>
-      <p className="auth-privacy">Your conversations are stored in your account and sent to OpenRouter to generate replies. Review the provider’s privacy practices before sharing sensitive details.</p>
+      <p className="auth-privacy">Your chats are saved to your account and shared with your chosen AI provider.</p>
     </form>
   );
 }

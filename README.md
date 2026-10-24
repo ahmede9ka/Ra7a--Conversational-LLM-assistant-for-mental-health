@@ -5,12 +5,33 @@
 This is a standard Next.js app and Vercel can detect its build settings automatically.
 
 1. Push the project to a Git repository you control, then import that repository at [vercel.com/new](https://vercel.com/new).
-2. In the Vercel project settings, add `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, the server-only `SUPABASE_SECRET_KEY`, `NEXT_PUBLIC_SITE_URL`, and `OPENROUTER_API_KEY`. `OPENROUTER_MODEL` is optional; the app defaults to `openrouter/free`.
+2. In Vercel settings, add `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, server-only `SUPABASE_SECRET_KEY`, and `NEXT_PUBLIC_SITE_URL`. For Vercel, set `LLM_PROVIDER=openrouter` and add `OPENROUTER_API_KEY`; `OPENROUTER_MODEL` is optional and defaults to `openrouter/free`. Vercel cannot reach Ollama on your development computer at `127.0.0.1`; production Ollama requires a reachable, secured server.
 3. Enable the variables for Production and Preview, then deploy. Set `NEXT_PUBLIC_SITE_URL` to your production URL for Production. Add the same variables to Development only if you want Vercel's local development command to use them.
 
-Keep the OpenRouter key in Vercel's environment variable settings. Do not add `.env.local` or a real key to the Git repository. The included `.env.example` contains placeholders only. After changing an environment variable, redeploy so the new deployment receives it.
+Keep provider and Supabase secret keys in Vercel's environment variable settings. Do not add `.env.local` or a real key to the Git repository. The included `.env.example` contains placeholders only. After changing an environment variable, redeploy so the new deployment receives it.
 
 For local development, copy `.env.example` to `.env.local`, add your key, and run `npm run dev`.
+
+## Inference providers
+
+Both providers use a shared server-only interface in `src/lib/llm`. `LLM_PROVIDER` (default `ollama`) sets the deployment default; signed-in users can save an `ollama` or `openrouter` choice in Settings. The allowlisted choice is stored in their Supabase Auth user metadata, so it needs no extra database migration. It only selects an adapter and cannot set a model name or endpoint. Provider failures never silently fall back to another provider.
+
+### Ollama (local development)
+
+Install/start Ollama and download/run the configured model:
+
+```powershell
+ollama pull qwen3:8b
+ollama run qwen3:8b
+```
+
+Set `LLM_PROVIDER=ollama`, `OLLAMA_BASE_URL=http://127.0.0.1:11434`, `OLLAMA_MODEL=qwen3:8b`, and `OLLAMA_TIMEOUT_MS=60000`. Next.js calls Ollama's non-streaming `/api/chat` endpoint from the server. The endpoint and model are server environment configuration only. In a container, `127.0.0.1` refers to that container; configure the private network address that reaches Ollama. Never expose an unauthenticated Ollama port to the public internet.
+
+Speed depends on model size, quantization, RAM/VRAM, context length, and hardware. Inspect loaded models with `ollama ps`; `nvidia-smi` can show NVIDIA GPU use on Windows if its driver tools are installed. GPU usage and latency are not assumed.
+
+### OpenRouter (cloud inference)
+
+Set `LLM_PROVIDER=openrouter`, `OPENROUTER_API_KEY`, and optionally `OPENROUTER_MODEL` (default `openrouter/free`) and `OPENROUTER_TIMEOUT_MS`. Requests leave the app server and are processed according to OpenRouter's current model routing, provider terms, account settings, and retention policies. Free model availability and limits may change. The API key stays on the server.
 
 ## Supabase accounts and saved conversations
 
@@ -30,11 +51,16 @@ The application uses Supabase Auth with cookie-based sessions. Each account can 
    NEXT_PUBLIC_SITE_URL=http://localhost:3000
    OPENROUTER_API_KEY=YOUR_OPENROUTER_KEY
    OPENROUTER_MODEL=openrouter/free
+   LLM_PROVIDER=ollama
+   OLLAMA_BASE_URL=http://127.0.0.1:11434
+   OLLAMA_MODEL=qwen3:8b
+   OLLAMA_TIMEOUT_MS=60000
+   OPENROUTER_TIMEOUT_MS=25000
    ```
 
    In Vercel, set `NEXT_PUBLIC_SITE_URL` to the public production URL, without a trailing slash. Never add `SUPABASE_SECRET_KEY` to a `NEXT_PUBLIC_` variable or expose it in browser code. Supabase secret keys bypass RLS; this app uses one only in a server-only module for the narrowly scoped assistant-reply RPC. The app also accepts the legacy `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` names during migration.
 
-5. Apply the database migration to the linked project:
+5. Apply the database migrations to the linked project:
 
    ```powershell
    npx supabase login
@@ -42,7 +68,7 @@ The application uses Supabase Auth with cookie-based sessions. Each account can 
    npx supabase db push
    ```
 
-   The migration is `supabase/migrations/20261024000100_auth_chat.sql`. Review it before applying it to a project with existing data.
+   Review migrations before applying to a project with existing data.
 6. Redeploy after setting Vercel environment variables. Sign up and verify email delivery, callback handling, sign-in/out, conversation creation, and chat persistence in the deployed environment.
 
 ### Local development and checks
@@ -54,10 +80,12 @@ The database isolation tests use Supabase CLI and a running local Docker environ
 ### Data handling and current limits
 
 - Text and voice-transcribed messages are saved to the user's Supabase account. Voice capture uses the browser's speech recognition; browser support and its processing behavior vary.
-- For ordinary replies, the server sends the current message and a limited recent conversation history to OpenRouter. A matching crisis-pattern response is generated locally and does not call OpenRouter. Provider retention and model routing depend on the OpenRouter account settings and selected model; do not promise that provider-side processing is zero-retention.
+- For ordinary replies, the server sends the current message and bounded recent history to the selected provider. OpenRouter processes requests as a cloud service; Ollama runs wherever the configured server runs, which may be remote. A detected self-harm response is generated locally and does not call either provider. Do not promise that provider-side processing is zero-retention.
 - API logs avoid message contents. Supabase, OpenRouter, and hosting providers may maintain their own operational logs under their respective settings and policies.
 - The app offers sign-out and profile-name editing, but does not yet offer password reset, account deletion, data export, conversation search, or a consent/retention control. Deleting a conversation removes its messages through the database cascade. Account removal currently requires an administrator to delete the Auth user; the database foreign keys then cascade owned records.
 - This is a supportive conversational interface, not a clinical service. The crisis response encourages contacting local emergency help or a trusted person; it does not identify local crisis numbers automatically.
+
+Ra7a uses a lightweight server-side response policy to adapt to requests to vent, practical questions, sadness, frustration, or overwhelm. These are communication strategies, not diagnoses or stored psychological profiles. The qualitative test set and scoring rubric are in `docs/emotional-quality-evaluation.json`. No provider quality comparison is claimed until the same cases are run against both providers.
 
 Raha is a Next.js voice and text companion. Its animated Three.js orb is a visual status indicator for the app's listening, response-generation, and speech-synthesis lifecycle. The orb is an interface treatment, not a clinical tool.
 

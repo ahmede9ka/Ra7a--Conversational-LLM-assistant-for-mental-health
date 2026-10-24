@@ -27,6 +27,10 @@ export const AI_ORB_CONFIG = {
     primaryWaveAmplitude: 0.018,
     secondaryWaveAmplitude: 0.009,
     internalFlowSpeed: 0.22,
+    cursorRotationRadians: 0.11,
+    cursorPositionAmplitude: 0.025,
+    cursorDamping: 2.4,
+    reducedMotionCursorFactor: 0.35,
     reducedMotionFactor: 0.08,
     stateIntensity: {
       idle: 0.15,
@@ -132,13 +136,14 @@ function breathPeriodForState(state: AIOrbState) {
   return periods.idleBreathingPeriodSeconds;
 }
 
-function OrbSurface({ state, motionFactor }: { state: AIOrbState; motionFactor: number }) {
+function OrbSurface({ state, motionFactor, cursorTarget, cursorActive }: { state: AIOrbState; motionFactor: number; cursorTarget: React.RefObject<THREE.Vector2>; cursorActive: React.RefObject<boolean> }) {
   const mesh = useRef<THREE.Mesh>(null);
   const material = useRef<THREE.ShaderMaterial>(null);
   const targetIntensity = useRef<number>(stateIntensity[state]);
   const currentIntensity = useRef<number>(stateIntensity[state]);
   const targetBreathPeriod = useRef<number>(breathPeriodForState(state));
   const currentBreathPeriod = useRef<number>(breathPeriodForState(state));
+  const cursor = useRef(new THREE.Vector2());
   const uniforms = useMemo(() => ({
     uTime: { value: 0 },
     uIntensity: { value: stateIntensity[state] },
@@ -161,6 +166,11 @@ function OrbSurface({ state, motionFactor }: { state: AIOrbState; motionFactor: 
   useFrame(({ clock }, delta) => {
     const elapsed = clock.getElapsedTime();
     const step = Math.min(delta, 0.05);
+    const cursorMotion = motionFactor === 0 ? 0 : motionFactor < 1 ? AI_ORB_CONFIG.animation.reducedMotionCursorFactor : 1;
+    const targetX = cursorActive.current ? cursorTarget.current.x : 0;
+    const targetY = cursorActive.current ? cursorTarget.current.y : 0;
+    cursor.current.x = THREE.MathUtils.damp(cursor.current.x, targetX, AI_ORB_CONFIG.animation.cursorDamping, step);
+    cursor.current.y = THREE.MathUtils.damp(cursor.current.y, targetY, AI_ORB_CONFIG.animation.cursorDamping, step);
     if (motionFactor === 0) {
       currentIntensity.current = targetIntensity.current;
       currentBreathPeriod.current = targetBreathPeriod.current;
@@ -177,9 +187,13 @@ function OrbSurface({ state, motionFactor }: { state: AIOrbState; motionFactor: 
       const motionScale = motionFactor;
       const energy = currentIntensity.current;
       const { floatPeriodSeconds, floatAmplitude, rotationSpeed, scaleAmplitude } = AI_ORB_CONFIG.animation;
-      mesh.current.position.y = Math.sin(elapsed * (Math.PI * 2 / floatPeriodSeconds)) * floatAmplitude * motionScale;
-      mesh.current.rotation.y = elapsed * rotationSpeed * motionScale;
-      mesh.current.rotation.x = Math.sin(elapsed * (Math.PI * 2 / floatPeriodSeconds) * 0.56) * 0.025 * motionScale;
+      mesh.current.position.x = cursor.current.x * AI_ORB_CONFIG.animation.cursorPositionAmplitude * cursorMotion;
+      mesh.current.position.y = Math.sin(elapsed * (Math.PI * 2 / floatPeriodSeconds)) * floatAmplitude * motionScale
+        + cursor.current.y * AI_ORB_CONFIG.animation.cursorPositionAmplitude * cursorMotion;
+      mesh.current.rotation.y = elapsed * rotationSpeed * motionScale
+        + cursor.current.x * AI_ORB_CONFIG.animation.cursorRotationRadians * cursorMotion;
+      mesh.current.rotation.x = Math.sin(elapsed * (Math.PI * 2 / floatPeriodSeconds) * 0.56) * 0.025 * motionScale
+        - cursor.current.y * AI_ORB_CONFIG.animation.cursorRotationRadians * 0.6 * cursorMotion;
       const breath = 1 + Math.sin(elapsed * (Math.PI * 2 / currentBreathPeriod.current)) * scaleAmplitude * (0.9 + energy * 0.2) * motionScale;
       mesh.current.scale.setScalar(breath);
     }
@@ -203,6 +217,8 @@ function OrbSurface({ state, motionFactor }: { state: AIOrbState; motionFactor: 
 
 export default function AIOrb({ state = "idle", size = "clamp(250px, 38vw, 350px)", className = "", motionEnabled = true }: AIOrbProps) {
   const [reducedMotion, setReducedMotion] = useState(false);
+  const cursorTarget = useRef(new THREE.Vector2());
+  const cursorActive = useRef(false);
   useEffect(() => {
     const query = window.matchMedia("(prefers-reduced-motion: reduce)");
     const update = () => setReducedMotion(query.matches);
@@ -210,7 +226,26 @@ export default function AIOrb({ state = "idle", size = "clamp(250px, 38vw, 350px
     query.addEventListener("change", update);
     return () => query.removeEventListener("change", update);
   }, []);
+  useEffect(() => {
+    if (!motionEnabled) {
+      cursorActive.current = false;
+      cursorTarget.current.set(0, 0);
+    }
+  }, [motionEnabled]);
   const motionFactor = motionEnabled ? (reducedMotion ? AI_ORB_CONFIG.animation.reducedMotionFactor : 1) : 0;
+  function trackCursor(event: React.PointerEvent<HTMLDivElement>) {
+    if (!motionEnabled || (event.pointerType !== "mouse" && event.pointerType !== "pen")) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    cursorTarget.current.set(
+      THREE.MathUtils.clamp(((event.clientX - bounds.left) / bounds.width) * 2 - 1, -1, 1),
+      THREE.MathUtils.clamp(1 - ((event.clientY - bounds.top) / bounds.height) * 2, -1, 1),
+    );
+    cursorActive.current = true;
+  }
+  function releaseCursor(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.pointerType !== "mouse" && event.pointerType !== "pen") return;
+    cursorActive.current = false;
+  }
 
   return (
     <div
@@ -220,6 +255,9 @@ export default function AIOrb({ state = "idle", size = "clamp(250px, 38vw, 350px
       aria-label={`Animated AI companion orb, ${state}`}
       data-state={state}
       data-motion={motionFactor === 1 ? "full" : motionFactor === 0 ? "off" : "reduced"}
+      onPointerMove={trackCursor}
+      onPointerLeave={releaseCursor}
+      onPointerCancel={releaseCursor}
     >
       <div className="orb-halo" aria-hidden="true" />
         <div className="orb-voice-bars" aria-hidden="true">
@@ -233,7 +271,7 @@ export default function AIOrb({ state = "idle", size = "clamp(250px, 38vw, 350px
         fallback={<div className="orb-fallback" aria-hidden="true" />}
       >
         <Suspense fallback={null}>
-          <OrbSurface state={state} motionFactor={motionFactor} />
+          <OrbSurface state={state} motionFactor={motionFactor} cursorTarget={cursorTarget} cursorActive={cursorActive} />
         </Suspense>
       </Canvas>
     </div>

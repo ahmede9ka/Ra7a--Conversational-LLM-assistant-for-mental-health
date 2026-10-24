@@ -1,5 +1,7 @@
 import type { ChatRequest } from "@/lib/chat/validation";
-import { buildMentalHealthSystemPrompt, containsInternalDraft, getCrisisReply, isPossibleSelfHarmCrisis } from "@/lib/server/safety";
+import { buildPersonaPrompt, getConversationPreference } from "@/lib/ai/adaptation";
+import { classifySafetyRisk, containsInternalDraft, getCrisisReply, getSafetyInstruction } from "@/lib/server/safety";
+import { ProviderError } from "@/lib/llm/types";
 import type { Database } from "@/lib/supabase/database.types";
 
 type MessageRow = Database["public"]["Tables"]["messages"]["Row"];
@@ -78,17 +80,25 @@ export async function runChatTurn(input: ChatRequest, userId: string, store: Cha
       if (title !== conversation.title) await store.updateTitle(input.conversationId, userId, title);
 
       const history = await store.getRecentMessages(input.conversationId, userId, 80);
-      const possibleCrisis = isPossibleSelfHarmCrisis(input.message);
-      let reply = possibleCrisis ? getCrisisReply(input.language) : "";
+      const risk = classifySafetyRisk(input.message);
+      let reply = risk !== "none" ? getCrisisReply(input.language, risk) : "";
       if (!reply) {
+        const boundedHistory = buildBoundedHistory(history);
+        const priorPreference = getConversationPreference(boundedHistory);
         const modelMessages: ModelMessage[] = [
-          { role: "system", content: buildMentalHealthSystemPrompt(input.language, possibleCrisis) },
-          ...buildBoundedHistory(history),
+          { role: "system", content: [buildPersonaPrompt(input.language, input.message, getSafetyInstruction(risk)), priorPreference].filter(Boolean).join("\n\n") },
+          ...boundedHistory,
         ];
         try {
           reply = (await provider(modelMessages, signal)).trim();
-        } catch {
-          return { status: 502, body: { error: "Raha couldn't respond just now. Your message is saved; please retry it.", retryable: true } };
+        } catch (error) {
+          if (error instanceof ProviderError && error.kind === "configuration") {
+            return { status: 503, body: { error: "Your selected reply provider is not configured for this deployment. Choose an available provider in Settings or contact the administrator.", retryable: true } };
+          }
+          if (error instanceof ProviderError && error.kind === "timeout") {
+            return { status: 504, body: { error: "Raha's reply took too long. Your message is saved; please retry it.", retryable: true } };
+          }
+          return { status: 502, body: { error: "Raha couldn't reach the selected reply provider. Your message is saved; please retry it.", retryable: true } };
         }
         if (!reply) return { status: 502, body: { error: "Raha returned an empty reply. Your message is saved; please retry it.", retryable: true } };
         if (containsInternalDraft(reply)) reply = fallbackReply(input.language);
@@ -106,7 +116,7 @@ export async function runChatTurn(input: ChatRequest, userId: string, store: Cha
         return { status: 503, body: { error: "The reply couldn't be saved. Retry this message to recover it safely.", retryable: true } };
       }
       const updatedConversation = { ...conversation, title };
-      return { status: 200, body: successBody(updatedConversation, userMessage, assistantMessage, possibleCrisis) };
+      return { status: 200, body: successBody(updatedConversation, userMessage, assistantMessage, risk !== "none") };
     } finally {
       await store.releaseTurn(input.conversationId, input.requestId).catch(() => undefined);
     }

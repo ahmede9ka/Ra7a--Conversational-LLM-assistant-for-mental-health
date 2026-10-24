@@ -37,13 +37,23 @@ export function ChatWorkspace({ initialConversations, initialConversationId, ini
   const [language, setLanguage] = useState("en-GB");
   const router = useRouter();
   const lock = useRef(false);
+  const conversationViewportRef = useRef<HTMLDivElement>(null);
+  const followConversationRef = useRef(true);
   const recognitionRef = useRef<Recognition | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const speechTimers = useRef<number[]>([]);
+  const speechRevealInterval = useRef<number | null>(null);
 
   const clearSpeechTimers = useCallback(() => {
     speechTimers.current.forEach((timer) => window.clearTimeout(timer));
     speechTimers.current = [];
+  }, []);
+
+  const stopSpeechReveal = useCallback(() => {
+    if (speechRevealInterval.current !== null) {
+      window.clearInterval(speechRevealInterval.current);
+      speechRevealInterval.current = null;
+    }
   }, []);
 
   useEffect(() => {
@@ -57,11 +67,22 @@ export function ChatWorkspace({ initialConversations, initialConversationId, ini
       abortRef.current?.abort();
       recognitionRef.current?.stop();
       window.speechSynthesis?.cancel();
+      stopSpeechReveal();
       clearSpeechTimers();
     };
-  }, [clearSpeechTimers]);
+  }, [clearSpeechTimers, stopSpeechReveal]);
+
+  useEffect(() => {
+    const viewport = conversationViewportRef.current;
+    if (!viewport || !followConversationRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      viewport.scrollTop = viewport.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [messages, visibleWords]);
 
   function revealReply(message: Message, text: string) {
+    stopSpeechReveal();
     clearSpeechTimers();
     const replyWords = words(text);
     setVisibleWords((current) => ({ ...current, [message.id]: 0 }));
@@ -94,6 +115,7 @@ export function ChatWorkspace({ initialConversations, initialConversationId, ini
       const data = await response.json().catch(() => ({}));
       if (response.status === 401) { router.replace("/login?error=session"); return; }
       if (!response.ok) throw new Error(data.error || "Could not load this conversation.");
+      followConversationRef.current = true;
       setConversationId(id);
       setMessages(data.messages as Message[]);
     } catch (error) {
@@ -119,9 +141,11 @@ export function ChatWorkspace({ initialConversations, initialConversationId, ini
           const loaded = await fetch(`/api/conversations/${next.id}`);
           const result = await loaded.json().catch(() => ({}));
           if (!loaded.ok) throw new Error(result.error || "Conversation deleted, but the next one could not be loaded.");
+          followConversationRef.current = true;
           setConversationId(next.id);
           setMessages(result.messages as Message[]);
         } else {
+          followConversationRef.current = true;
           setConversationId(null);
           setMessages([]);
         }
@@ -137,8 +161,9 @@ export function ChatWorkspace({ initialConversations, initialConversationId, ini
   async function sendMessage(text: string, requestId = crypto.randomUUID(), retry = false) {
     if (lock.current || !text.trim()) return;
     lock.current = true;
+    followConversationRef.current = true;
     setBusy(true);
-    setStatus("Raha is taking a moment with that.");
+    setStatus("I’m here with you.");
     setOrbState("thinking");
     let activeConversationId = conversationId;
     let temporaryMessageId = requestId;
@@ -172,34 +197,41 @@ export function ChatWorkspace({ initialConversations, initialConversationId, ini
       const replyWords = words(assistantMessage.content);
       setVisibleWords((current) => ({ ...current, [assistantMessage.id]: 0 }));
       if (voiceReplies && "speechSynthesis" in window) {
+        stopSpeechReveal();
+        clearSpeechTimers();
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(assistantMessage.content);
         utterance.lang = language;
-        utterance.onstart = () => setOrbState("speaking");
+        let scheduledWords = 0;
+        utterance.onstart = () => {
+          setOrbState("speaking");
+          scheduledWords = Math.max(scheduledWords, 1);
+          setVisibleWords((current) => ({ ...current, [assistantMessage.id]: Math.max(current[assistantMessage.id] || 0, scheduledWords) }));
+          speechRevealInterval.current = window.setInterval(() => {
+            scheduledWords = Math.min(replyWords.length, scheduledWords + 1);
+            setVisibleWords((current) => ({ ...current, [assistantMessage.id]: Math.max(current[assistantMessage.id] || 0, scheduledWords) }));
+            if (scheduledWords >= replyWords.length) stopSpeechReveal();
+          }, 340);
+        };
         utterance.onboundary = (event) => {
           if (event.name === "word") {
-            const shown = Math.min(replyWords.length, assistantMessage.content.slice(0, event.charIndex).trim().split(/\s+/).filter(Boolean).length + 2);
+            const shown = Math.min(replyWords.length, assistantMessage.content.slice(0, event.charIndex).trim().split(/\s+/).filter(Boolean).length + 1);
+            scheduledWords = Math.max(scheduledWords, shown);
             setVisibleWords((current) => ({ ...current, [assistantMessage.id]: Math.max(current[assistantMessage.id] || 0, shown) }));
           }
         };
         utterance.onend = () => {
+          stopSpeechReveal();
           clearSpeechTimers();
           setVisibleWords((current) => ({ ...current, [assistantMessage.id]: replyWords.length }));
           setOrbState("idle");
         };
         utterance.onerror = () => {
+          stopSpeechReveal();
           revealReply(assistantMessage, assistantMessage.content);
           setOrbState("idle");
         };
         window.speechSynthesis.speak(utterance);
-        // Some browser/voice combinations omit word boundary events; keep text moving in that case.
-        speechTimers.current.push(window.setTimeout(() => {
-          setVisibleWords((current) => {
-            if ((current[assistantMessage.id] || 0) > 0) return current;
-            const next = { ...current, [assistantMessage.id]: Math.min(1, replyWords.length) };
-            return next;
-          });
-        }, 1200));
       } else {
         revealReply(assistantMessage, assistantMessage.content);
         setOrbState("idle");
@@ -235,7 +267,7 @@ export function ChatWorkspace({ initialConversations, initialConversationId, ini
     recognitionRef.current = recognition;
     setBusy(true);
     setOrbState("listening");
-    setStatus("I'm here. Take your time.");
+    setStatus("I’m here.");
     try { recognition.start(); } catch { setStatus("I couldn't start listening. You can write to me instead."); setBusy(false); setOrbState("idle"); }
   }
 
@@ -268,7 +300,17 @@ export function ChatWorkspace({ initialConversations, initialConversationId, ini
             </div>)}
           </div>
           <div className="chat-cloud-frame">
-            <div className="conversation" aria-label="Conversation" aria-live="polite">
+            <div
+              className="conversation"
+              ref={conversationViewportRef}
+              tabIndex={0}
+              aria-label="Conversation messages"
+              aria-live="polite"
+              onScroll={(event) => {
+                const viewport = event.currentTarget;
+                followConversationRef.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 72;
+              }}
+            >
               {messages.length === 0 && <div className="conversation-empty">{busy ? "Loading your conversation…" : "Whenever you're ready, you can start here."}</div>}
               {messages.map((message) => <div className={`message ${message.role === "user" ? "user-message" : "reply-message"}`} key={message.id}>
                 <span className="message-label">{message.role === "user" ? "YOU SHARED" : "RAHA"}</span>
@@ -286,7 +328,7 @@ export function ChatWorkspace({ initialConversations, initialConversationId, ini
               <input id="message" name="message" placeholder="Write what's on your mind…" maxLength={2000} disabled={busy} />
               <button type="submit" disabled={busy} aria-label="Send message">↑</button>
             </form>
-            <p className="privacy-note">Your conversations are saved to your account and sent to OpenRouter to generate replies. Provider retention may vary. This is not a substitute for professional care.</p>
+            <p className="privacy-note">Your chats are saved to your account and shared with your chosen AI provider.</p>
           </div>
         </div>
       </section>

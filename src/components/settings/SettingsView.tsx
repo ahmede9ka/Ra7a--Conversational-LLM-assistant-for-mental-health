@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { signOutAction, updateDisplayNameAction } from "@/app/auth/actions";
+import { signOutAction, updateDisplayNameAction, updateProviderPreferenceAction } from "@/app/auth/actions";
 
 type SettingsTab = "General" | "Voice" | "Appearance" | "Account";
 
-export function SettingsView({ email, displayName, error, saved }: { email: string; displayName: string; error?: string; saved: boolean }) {
+export function SettingsView({ email, displayName, providerPreference, defaultProvider, error, saved, providerSaved }: { email: string; displayName: string; providerPreference: string; defaultProvider: "ollama" | "openrouter"; error?: string; saved: boolean; providerSaved: boolean }) {
   const [tab, setTab] = useState<SettingsTab>("General");
   const [voiceReplies, setVoiceReplies] = useState(true);
   const [orbMotion, setOrbMotion] = useState(true);
@@ -49,6 +49,15 @@ export function SettingsView({ email, displayName, error, saved }: { email: stri
           <div className="settings-section-heading"><span>WELCOME</span><h2>Your pace, your space.</h2></div>
           <div className="glass-setting-card about-card"><span className="setting-symbol" aria-hidden="true">✳</span><div><h3>A little room to breathe</h3><p>Raha is here to listen and offer a gentle moment of support, whenever you need one.</p></div></div>
           <div className="glass-setting-card setting-row"><div><h3>Start fresh</h3><p>Restore the original Raha preferences.</p></div><button type="button" className="reset-button" onClick={resetPreferences}>Reset</button></div>
+          <form action={updateProviderPreferenceAction} className="provider-settings-card">
+            <div className="settings-section-heading"><span>REPLY ENGINE</span><h2>Choose how Ra7a responds.</h2></div>
+            <label className="glass-setting-card provider-choice"><input type="radio" name="provider" value="ollama" defaultChecked={(providerPreference || defaultProvider) === "ollama"} /><span><strong>Ollama · Local AI</strong><small>Runs on the Ollama server configured for Ra7a. It must be reachable by the app.</small></span></label>
+            <label className="glass-setting-card provider-choice"><input type="radio" name="provider" value="openrouter" defaultChecked={(providerPreference || defaultProvider) === "openrouter"} /><span><strong>OpenRouter · Cloud AI</strong><small>Uses the configured cloud model. Requires internet and depends on model availability and usage limits.</small></span></label>
+            <button type="submit" className="reset-button provider-save">Save provider</button>
+            <p className="provider-current">Account choice: {providerPreference ? "saved for this account" : `deployment default (${defaultProvider})`}. Ollama availability depends on the server; this browser cannot connect to Ollama on your computer.</p>
+            {error === "provider" && <p className="settings-notice" role="alert">Could not save this choice. Please sign in again and try once more.</p>}
+            {providerSaved && <p className="settings-notice" role="status">Your setting has been saved.</p>}
+          </form>
           {notice && <p className="settings-notice" role="status">{notice}</p>}
           <div className="settings-footnote">Your display preferences are saved on this device.</div>
         </section>}
@@ -74,7 +83,7 @@ export function SettingsView({ email, displayName, error, saved }: { email: stri
           {error === "save" && <p className="auth-error" role="alert">Couldn&apos;t save your name. Please try again.</p>}
           {saved && <p className="settings-notice" role="status">Your display name was saved.</p>}
           <form action={signOutAction} className="glass-setting-card setting-row"><div><h3>Sign out</h3><p>End this session on this device.</p></div><button type="submit" className="reset-button">Log out</button></form>
-          <p className="account-privacy">Chats are stored in your Supabase account database and sent to OpenRouter to generate replies. OpenRouter&apos;s data handling and retention depend on your provider settings. Raha does not currently provide a self-service account deletion flow.</p>
+          <p className="account-privacy">Chats are stored in your Supabase account database and sent to your selected provider (Ollama or OpenRouter) to generate replies. With OpenRouter, messages leave the app server and provider retention depends on the selected model and account settings. Ollama is local only when its configured server runs on your own device. Raha does not currently provide a self-service account deletion flow.</p>
         </section>}
       </section>
     </main>
