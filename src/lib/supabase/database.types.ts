@@ -21,6 +21,12 @@ export type Database = {
         Update: never;
         Relationships: [];
       };
+      wellbeing_records: {
+        Row: { id: string; user_id: string; record_type: "mood" | "reflection" | "activity" | "exercise" | "weekly_reflection"; data: Json; created_at: string; updated_at: string };
+        Insert: { id?: string; user_id: string; record_type: "mood" | "reflection" | "activity" | "exercise" | "weekly_reflection"; data: Json; created_at?: string; updated_at?: string };
+        Update: { record_type?: "mood" | "reflection" | "activity" | "exercise" | "weekly_reflection"; data?: Json; updated_at?: string };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {

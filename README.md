@@ -89,6 +89,38 @@ Ra7a uses a lightweight server-side response policy to adapt to requests to vent
 
 Raha is a Next.js voice and text companion. Its animated Three.js orb is a visual status indicator for the app's listening, response-generation, and speech-synthesis lifecycle. The orb is an interface treatment, not a clinical tool.
 
+## Talk, Reflect, Reset, and My Progress
+
+The signed-in navigation now includes four areas:
+
+- **Talk** keeps the existing text chat, speech input/output, conversation history, safety handling, and user-selected Ollama/OpenRouter provider.
+- **Reflect** offers a five-point user-entered mood check-in, optional emotions/context/stress/note, deliberate speech-to-text journal fields with transcript review, and a six-step thought journal. The thought journal works without an LLM. Drafts are stored only when the user selects **Save and leave**; completed entries only when they select **Finish reflection**. Individual records can be deleted.
+- **Reset** includes a timer-based comfortable breathing guide with a user-selected pace and duration, pause/resume/stop, reduced-motion support, and an optional five-senses grounding guide. No ambient audio is played. Grounding notes stay in the page and are not stored. A session summary is saved when a user finishes or stops an active breathing session; grounding sessions are saved only when finished. Feedback is optional.
+- **My Progress** shows actual saved mood entries over 7 or 30 days, an observed mood distribution, recent check-ins, user-recorded context comparisons, planned/completed/skipped activities, reflection/session history, and an optional weekly reflection. Activity status can be changed, rescheduled, or deleted. Optional before/after mood ratings are user-entered.
+
+Weekly reflections are created locally and only after the user selects the record categories to include. They use counts of mood check-ins and/or completed activities from the current week. They do not include journal text, conversation text, diagnoses, or an LLM. Users can edit or dismiss a draft and delete a saved reflection. Context comparisons require at least two check-ins for a selected context and describe co-occurrence only; they do not claim causation.
+
+### Wellbeing data and migrations
+
+The versioned migration `supabase/migrations/20261024000200_wellbeing_records.sql` adds `public.wellbeing_records`. It stores typed-by-server JSON records for mood, thought reflections, activities, exercise sessions, and weekly reflections. The authenticated server derives the owner ID; clients cannot choose it. RLS policies restrict reads, writes, updates, and deletes to `auth.uid()`. The API validates each record shape and length before writing it, and row-specific actions additionally filter by the authenticated owner. Deleting an Auth user cascades these records.
+
+Apply the migration to a linked Supabase project with:
+
+```powershell
+npx supabase link --project-ref YOUR_PROJECT_REF
+npx supabase db push
+```
+
+Review the SQL and your target project before pushing. This repository change does not itself apply the migration to your remote Supabase project. The features will show a save/load error until the migration is applied.
+
+### Curated exercise content and limitations
+
+The reviewed, versioned exercise definitions live in `src/lib/wellbeing/content.ts`. They include purpose, duration, steps, suitable contexts, source, evidence note, limitation, version, review date, and review status. The two initial Reset guides are adapted conservatively from the [NHS breathing exercise for stress](https://www.nhs.uk/mental-health/self-help/guides-tools-and-activities/breathing-exercises-for-stress/) and the [Royal United Hospitals Bath grounding leaflet](https://www.ruh.nhs.uk/patients/patient_information/PAE129_Mindfulness_and_grounding_exercises.pdf). The thought-journal prompts are informed by the [NHS thought-record guide](https://www.nhs.uk/every-mind-matters/mental-wellbeing-tips/self-help-cbt-techniques/thought-record/), while remaining optional and non-clinical. These references inform the content; they do not validate Ra7a or establish a treatment effect. The design follows the cautious, user-tailored approach described in [NICE guidance on digital behaviour-change interventions](https://www.nice.org.uk/guidance/ng183/chapter/recommendations).
+
+New material should remain marked `professional-review-needed` until it has been checked by an appropriately qualified reviewer. Do not add clinical claims or unverified citations. Ra7a is a general wellbeing and reflection tool, not therapy or a clinically validated treatment. Breathing and grounding can feel uncomfortable for some people; users are told to stop, skip, or breathe normally.
+
+The feature suite requires the new Supabase migration and a signed-in account. It adds no environment variables and does not change the selected LLM provider. New deterministic features work without Ollama or OpenRouter. Speech transcription uses browser speech recognition when available; browser support and audio processing vary, and raw audio is not stored by this feature. Individual mood, activity, journal, weekly reflection, and exercise records can be deleted in the app. Account-wide export and deletion remain unavailable.
+
 ## Research-Informed Design of the AI Orb
 
 ### Design objectives

@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { signOutAction } from "@/app/auth/actions";
 import type { AIOrbState } from "@/components/AIOrb";
 import type { Database } from "@/lib/supabase/database.types";
+import { WellbeingNav } from "@/components/wellbeing/WellbeingNav";
 
 const AIOrb = dynamic(() => import("@/components/AIOrb"), { ssr: false, loading: () => <div className="ai-orb orb-loading" aria-hidden="true" /> });
 type Conversation = Pick<Database["public"]["Tables"]["conversations"]["Row"], "id" | "title" | "updated_at">;
@@ -281,6 +282,7 @@ export function ChatWorkspace({ initialConversations, initialConversationId, ini
         </div>
       </header>
       <section className="wellness-card authenticated-card" aria-labelledby="page-title">
+        <WellbeingNav active="/" />
         <div className="orb-panel">
           <div className="brand-logo" lang="ar" dir="rtl" aria-label="Raha">راحة</div>
           <h1 id="page-title">A space to pause.</h1>
