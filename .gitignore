@@ -3,11 +3,7 @@ node_modules/
 out/
 .vercel/
 .env*
-.env.example
+!.env.example
 npm-debug.log*
 debug.log
-debug.log
 *.tsbuildinfo
-.env
-.env.local
-.env.*.local

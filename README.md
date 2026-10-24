@@ -5,12 +5,59 @@
 This is a standard Next.js app and Vercel can detect its build settings automatically.
 
 1. Push the project to a Git repository you control, then import that repository at [vercel.com/new](https://vercel.com/new).
-2. In the Vercel project settings, add `OPENROUTER_API_KEY` with your own OpenRouter key. Add `OPENROUTER_MODEL` as `openrouter/free` if you want to set the model explicitly; the app uses that default if the variable is omitted.
-3. Enable the variables for Production and Preview, then deploy. Add the same variables to Development only if you want Vercel's local development command to use them.
+2. In the Vercel project settings, add `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, the server-only `SUPABASE_SECRET_KEY`, `NEXT_PUBLIC_SITE_URL`, and `OPENROUTER_API_KEY`. `OPENROUTER_MODEL` is optional; the app defaults to `openrouter/free`.
+3. Enable the variables for Production and Preview, then deploy. Set `NEXT_PUBLIC_SITE_URL` to your production URL for Production. Add the same variables to Development only if you want Vercel's local development command to use them.
 
 Keep the OpenRouter key in Vercel's environment variable settings. Do not add `.env.local` or a real key to the Git repository. The included `.env.example` contains placeholders only. After changing an environment variable, redeploy so the new deployment receives it.
 
 For local development, copy `.env.example` to `.env.local`, add your key, and run `npm run dev`.
+
+## Supabase accounts and saved conversations
+
+The application uses Supabase Auth with cookie-based sessions. Each account can read and change only its own profile, conversations, and messages through PostgreSQL row-level security (RLS). The migration also limits message writes and uses a server-only operation to persist an AI reply after the server has verified the matching user turn. See the [Supabase SSR guide](https://supabase.com/docs/guides/auth/server-side/creating-a-client?environment=client-component) and [RLS guide](https://supabase.com/docs/guides/database/postgres/row-level-security) for the underlying platform behavior.
+
+### Configure a Supabase project
+
+1. Create a Supabase project and copy its project URL, publishable/anon key, and service-role key from the project API settings.
+2. In **Authentication → URL Configuration**, set the production site URL to your deployed Raha URL. Add `http://localhost:3000/auth/callback` and your deployed URL plus `/auth/callback` to the allowed redirect URLs. For Vercel preview deployments, add the preview callback URLs you intend to use.
+3. In **Authentication → Providers → Email**, choose whether email confirmation is enabled and configure SMTP if you need dependable production email delivery. With confirmation enabled, new users must follow the email link before they can sign in.
+4. Add these environment variables to `.env.local` for local development and to Vercel for each deployment environment:
+
+   ```dotenv
+   NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=YOUR_PUBLISHABLE_KEY
+   SUPABASE_SECRET_KEY=YOUR_SECRET_KEY
+   NEXT_PUBLIC_SITE_URL=http://localhost:3000
+   OPENROUTER_API_KEY=YOUR_OPENROUTER_KEY
+   OPENROUTER_MODEL=openrouter/free
+   ```
+
+   In Vercel, set `NEXT_PUBLIC_SITE_URL` to the public production URL, without a trailing slash. Never add `SUPABASE_SECRET_KEY` to a `NEXT_PUBLIC_` variable or expose it in browser code. Supabase secret keys bypass RLS; this app uses one only in a server-only module for the narrowly scoped assistant-reply RPC. The app also accepts the legacy `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` names during migration.
+
+5. Apply the database migration to the linked project:
+
+   ```powershell
+   npx supabase login
+   npx supabase link --project-ref YOUR_PROJECT_REF
+   npx supabase db push
+   ```
+
+   The migration is `supabase/migrations/20261024000100_auth_chat.sql`. Review it before applying it to a project with existing data.
+6. Redeploy after setting Vercel environment variables. Sign up and verify email delivery, callback handling, sign-in/out, conversation creation, and chat persistence in the deployed environment.
+
+### Local development and checks
+
+Use Node.js 22 or newer. Install dependencies with `npm install`, configure `.env.local`, then run `npm run dev`. Useful checks are `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build`.
+
+The database isolation tests use Supabase CLI and a running local Docker environment. Start Supabase with `npx supabase start`, then run `npm run test:db`. The tests are in `supabase/tests/rls.test.sql`; the platform's pgTAP workflow is described in the [Supabase database testing guide](https://supabase.com/docs/guides/local-development/testing/pgtap-extended).
+
+### Data handling and current limits
+
+- Text and voice-transcribed messages are saved to the user's Supabase account. Voice capture uses the browser's speech recognition; browser support and its processing behavior vary.
+- For ordinary replies, the server sends the current message and a limited recent conversation history to OpenRouter. A matching crisis-pattern response is generated locally and does not call OpenRouter. Provider retention and model routing depend on the OpenRouter account settings and selected model; do not promise that provider-side processing is zero-retention.
+- API logs avoid message contents. Supabase, OpenRouter, and hosting providers may maintain their own operational logs under their respective settings and policies.
+- The app offers sign-out and profile-name editing, but does not yet offer password reset, account deletion, data export, conversation search, or a consent/retention control. Deleting a conversation removes its messages through the database cascade. Account removal currently requires an administrator to delete the Auth user; the database foreign keys then cascade owned records.
+- This is a supportive conversational interface, not a clinical service. The crisis response encourages contacting local emergency help or a trusted person; it does not identify local crisis numbers automatically.
 
 Raha is a Next.js voice and text companion. Its animated Three.js orb is a visual status indicator for the app's listening, response-generation, and speech-synthesis lifecycle. The orb is an interface treatment, not a clinical tool.
 

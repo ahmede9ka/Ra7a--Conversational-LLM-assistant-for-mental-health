@@ -1,68 +1,71 @@
 import { NextResponse } from "next/server";
+import { chatRequestSchema } from "@/lib/chat/validation";
+import { runChatTurn, type ChatProvider, type ModelMessage } from "@/lib/server/chat-engine";
+import { createSupabaseChatStore } from "@/lib/server/supabase-chat-store";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getAuthenticatedUser } from "@/lib/supabase/auth";
+import { getSupabaseSecretKey } from "@/lib/supabase/env";
 
 export const runtime = "nodejs";
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-const safeFallback = "I’m sorry things feel so heavy right now. You don’t have to sort everything out at once. What feels most important to talk through first?";
-
-function containsInternalDraft(text: string) {
-  return /(?:^|\n)\s*(?:\d+[.)]\s*)?(?:\*\*)?(?:analy[sz]e the user input|analysis of the user input|formulate the response strategy|response strategy|draft(?:ing)? responses?|emotion:|core issue:|persona constraints:|word count:)/i.test(text)
-    || /chain[- ]of[- ]thought|internal reasoning/i.test(text);
-}
+const openRouterProvider: ChatProvider = async (messages: ModelMessage[], signal?: AbortSignal) => {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error("Chat provider is not configured.");
+  const response = await fetch(OPENROUTER_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: process.env.OPENROUTER_MODEL || "openrouter/free",
+      messages,
+      temperature: 0.55,
+      max_tokens: 512,
+    }),
+    cache: "no-store",
+    signal,
+  });
+  if (!response.ok) {
+    console.warn("[chat] Provider returned HTTP", response.status);
+    throw new Error("Provider request failed.");
+  }
+  const result: unknown = await response.json().catch(() => null);
+  if (!result || typeof result !== "object") throw new Error("Provider response was invalid.");
+  const choices = (result as { choices?: Array<{ message?: { content?: unknown } }> }).choices;
+  const content = choices?.[0]?.message?.content;
+  if (typeof content !== "string") throw new Error("Provider response contained no text.");
+  return content;
+};
 
 export async function POST(request: Request) {
   const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json({ error: "The chat service is not configured yet." }, { status: 503 });
-  }
+  if (!apiKey) return NextResponse.json({ error: "Raha's reply service is not configured yet." }, { status: 503 });
+  if (!getSupabaseSecretKey()) return NextResponse.json({ error: "Raha's database service is not configured yet." }, { status: 503 });
 
-  let message: unknown;
-  let language: unknown;
+  let body: unknown;
+  try { body = await request.json(); } catch { return NextResponse.json({ error: "Please send a valid chat request." }, { status: 400 }); }
+  const parsed = chatRequestSchema.safeParse(body);
+  if (!parsed.success) return NextResponse.json({ error: "Check your message and conversation, then try again." }, { status: 400 });
+
+  let auth;
+  try { auth = await getAuthenticatedUser(); } catch { auth = null; }
+  if (!auth) return NextResponse.json({ error: "Your session has expired. Please sign in again." }, { status: 401 });
+
+  let store;
   try {
-    ({ message, language } = await request.json());
+    store = createSupabaseChatStore(auth.supabase, createSupabaseAdminClient());
   } catch {
-    return NextResponse.json({ error: "Please send a valid message." }, { status: 400 });
+    return NextResponse.json({ error: "Raha's database service is not configured yet." }, { status: 503 });
   }
-  if (typeof message !== "string" || !message.trim() || message.length > 2000) {
-    return NextResponse.json({ error: "Message must be between 1 and 2000 characters." }, { status: 400 });
-  }
-  const responseLanguage = typeof language === "string" && ["en-GB", "en-US", "ar-SA", "fr-FR"].includes(language) ? language : "en-GB";
-  const languageName = responseLanguage === "ar-SA" ? "Arabic" : responseLanguage === "fr-FR" ? "French" : "English";
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25_000);
+  const abortRequest = () => controller.abort();
+  request.signal.addEventListener("abort", abortRequest, { once: true });
   try {
-    const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: process.env.OPENROUTER_MODEL || "openrouter/free",
-        messages: [
-          { role: "system", content: `You are Raha, a warm and respectful emotional support companion. Reply directly to the person in a natural, caring voice. Reply in ${languageName} (${responseLanguage}) unless the user explicitly asks for another language. Never show analysis, reasoning, drafts, response plans, labels, word counts, or notes about following instructions. Output only the final message as plain text, with no headings or markdown. Keep it under 60 words. Listen, validate feelings, and offer gentle support without claiming to be a therapist or encouraging dependence. If someone may be in immediate danger or considering self-harm, respond with empathy and encourage them to contact local emergency services or a trusted person now.` },
-          { role: "user", content: message.trim() },
-        ],
-        temperature: 0.6,
-        max_tokens: 512,
-        reasoning_effort: "none",
-      }),
-      cache: "no-store",
-    });
-    if (!upstream.ok) {
-      const detail = await upstream.text().catch(() => "");
-      console.error("[chat] OpenRouter returned an error", upstream.status, detail.slice(0, 500));
-      return NextResponse.json({ error: "The chat service couldn’t respond. Please try again." }, { status: 502 });
-    }
-    const data = await upstream.json();
-    const choice = data.choices?.[0];
-    const reply = choice?.message?.content?.trim();
-    if (typeof reply !== "string" || !reply) {
-      console.error("[chat] Model returned no reply text", data.model, choice?.finish_reason);
-      throw new Error("Empty response");
-    }
-    if (containsInternalDraft(reply)) {
-      console.error("[chat] Replaced internal-draft response", data.model);
-      return NextResponse.json({ reply: safeFallback });
-    }
-    return NextResponse.json({ reply });
-  } catch (error) {
-    console.error("[chat] OpenRouter request failed", error instanceof Error ? error.message : "Unknown error");
-    return NextResponse.json({ error: "The chat service couldn’t respond. Please try again." }, { status: 502 });
+    const result = await runChatTurn(parsed.data, auth.user.id, store, openRouterProvider, controller.signal);
+    return NextResponse.json(result.body, { status: result.status, headers: { "Cache-Control": "private, no-store" } });
+  } finally {
+    clearTimeout(timeout);
+    request.signal.removeEventListener("abort", abortRequest);
   }
 }
